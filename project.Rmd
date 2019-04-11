@@ -1,0 +1,212 @@
+---
+title: "Prediction Assignment"
+date: "April 11, 2019"
+output: html_document
+---
+
+```{r, include=FALSE}
+library(caret)
+library(knitr)
+load("project_workspace.RData")
+```
+
+##Problem
+
+Six participants were asked to perform a set of 10 barbell bicep curls in five different methods; one correctly, and four different common mistakes.  Data from the exercise was collected using accelerometers on the dumbbell, armband, belt, and glove of the participant.  In this analysis, I will attempt to categorize how well an individual preforms barbell lifts.  All code for this assignment will be presented in the Appendix.
+
+##Data
+
+The "pml-training.csv" and "pml-testing.csv" datasets contained 19,622 and 20 observations respectively, and 160 variables.  The outcome of interest was the "classe" variable, which is a five level categorical variable defining how the exercise was completed: A - exactly according to the specification, B - throwing elbows to the front, C - lifting the dumbbell only halfway, D - lowering the dumbbell only halfway, and E - throwing the hips to the front.  A majority of the variables were measurements from the dumbbell, armband, belt, and glove sensors pertaining to the exercise being performed.  
+
+##Analysis
+
+The "pml-training.csv" dataset was split into two sets, a training set and a validation set containing 14,718 and 4,904 observations respectively.  The training set will be used to train the model, and the validation set will be used to determine performance on out of sample data.
+100 variables were excluded from the model due to a missing or blank values.  Additionally, seven variables were removed containing username, timestamp, observation index, and recording window information, because they would not be useful for prediction and generalizability of the model.  This leaves 52 variables to be used for classification. 
+After plotting histograms, and pairs of the remaining variables, it was clear that some variables were highly skewed, and some were highly correlated with each other.  Due to this, in addition to the original testing dataset, two variations of the dataset would also be used to train the model: one centered and scaled, and one with principal component analysis (PCA) compnents.  The same pre processing technique was applied to the validation set.  Scaling and centering was performed on all of the variables because of the skewness found in many variables.  A PCA was performed to reduce the number of variables used in predictions due to the high correlation.  The PCA found that only 27 variables were needed to explain 95% of the variance observed.  Both of these operations were performed using the preProcess() function in R's caret package.  
+
+There were six models fit in total, using the original data, the centered and scaled data, or the PCA data.  Modelling methods included random forests, boosted trears, linear disciminant, and combination models.  Table 1 provides information about the models fit, and their results.  The original data was fit to four models initially.  The random forest, and the combination model preformed the best on the validation set.  With preference for a simplier model, I deemed the random forest model to be the best fit on the original, non-transformed training set.  With these results in mind, I then fit a random forest to both the scaled and centered, and PCA training data sets to see if the validation set accuracy could be improved.  With success, the random forest using scaled and centered data improved the validation set accuracy minimally.  The confusion matrix from the random forest using centered and scaled is displayed in Table 2.  As seen in this table, there isn't any class that is being substantially mis-classified. This leads me to conclude that the random forest using centered and scaled data is the best model with an estimated out of sample error of 0.63%.  
+
+```{r, echo=FALSE}
+
+model_comparison <- data.frame(model_num = c(1:6)
+                               , model_description = c("Random forest", "Boosted trees", "Linear discriminant", "Combination (M1, M2, M3)"
+                                                       , "Random forest", "Random forest")
+                               , data = c("Original", "Original", "Original", "Original", "Scaled and centered", "PCA")
+                               , validation_set_accuracy = c(m2_acc, m3_acc, m4_acc, m5_acc, m6_acc, m1_acc))
+kable(model_comparison, caption = "Table 1 Model comparison")
+```
+
+```{r, echo=FALSE}
+m6_conf_max <- table(validation$classe, m6_valid_pred)
+
+kable(m6_conf_max, caption = "Table 2 Confusion matrix (validation set)")
+```
+
+##Conclusion
+
+The best model to classify an individuals dumbell bicep curl performance is the 5th  model; a random forest fit to the centered and scaled data.  It had the highest accuracy (99.37%) when predicting values in the validation set.  After applying the centering and scaling on the final 20 values in the test set, the final predicted values for are below.  After inputting them in the quiz, there was a 100% accuracy on the coursesaquiz testing set.
+
+```{r, echo = FALSE}
+# Predict on testing set
+test.PC2 <- predict(preProc2, testing.orig)
+m6_test_pred <- predict(m6, newdata = test.PC2)
+
+# Results
+m6_test_pred
+```
+
+## References
+http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf  
+http://groupware.les.inf.puc-rio.br/har  
+https://www.coursera.org/learn/practical-machine-learning/supplement/PvInj/course-project-instructions-read-first  
+
+##Appendix
+
+```{r firststep, warning=FALSE, message=FALSE}
+library(caret)
+library(knitr)
+
+set.seed(1234)
+
+training.orig <- read.csv("pml-training.csv")
+testing.orig <- read.csv("pml-testing.csv")
+```
+
+```{r dataprep, include=TRUE}
+#Remove columns with nothing in them
+training.orig <- training.orig[sapply(training.orig, function(x) !any(is.na(x) | x == ""))] 
+
+# remove columns with time info and username - this wont be of use to predict
+training.orig <- training.orig[,-c(1:7)] 
+
+#remove the same columns as we did for the testing set
+testing.orig <- testing.orig[sapply(testing.orig, function(x) !any(is.na(x) | x == ""))]
+testing.orig <- testing.orig[,-c(1:7)]
+```
+
+
+```{r setsplit}
+# split training set into training and validation sets
+inTrain <- createDataPartition(y=training.orig$classe, p = 0.75, list = FALSE)
+training <- training.orig[inTrain, ]
+validation <- training.orig[-inTrain, ]
+```
+
+```{r correlation, include = TRUE}
+# look at the correlation between all variables except the outcome (classe)
+corr_mat <- abs(cor(training[,-53]))
+diag(corr_mat) <- 0
+
+kable(which(corr_mat > .8, arr.ind=T), caption = "Table 1 Highly correlated variables")
+
+```
+
+```{r histograms, include= TRUE, eval=FALSE}
+# Plot histograms of all variables to look for skewness
+for(i in 1:52){
+  print(qplot(training[,i], colour = classe, data = training, geom = "density", main = names(training)[i]))
+}
+```
+
+```{r preprocess, include= TRUE, eval=FALSE}
+# PCA preprocessing
+preProc1 <- preProcess(training[,-53], method = "pca")
+train.PC1 <- predict(preProc1, training)
+valid.PC1 <- predict(preProc1, validation)
+
+# Centered and scaled preprocessing
+preProc2 <- preProcess(training[,-53], method = c("center", "scale"))
+train.PC2 <- predict(preProc2, training)
+valid.PC2 <- predict(preProc2, validation)
+```
+
+
+```{r Model2, eval=FALSE, include=TRUE}
+# M1 - Random forest
+
+m2 <- train(classe ~ ., method = "rf", data = training)
+m2_valid_pred <- predict(m2, newdata = validation)
+m2_acc <- sum(m2_valid_pred == validation$classe)/length(validation$classe)
+m2_conf_max <- table(validation$classe, m2_valid_pred)
+```
+
+```{r Model3, eval=FALSE, include=TRUE}
+# M2 - boosted trees
+
+m3 <- train(classe ~ ., method = "gbm", data = training)
+m3_valid_pred <- predict(m3, newdata = validation)
+m3_acc <- sum(m3_valid_pred == validation$classe)/length(validation$classe)
+m3_conf_max <- table(validation$classe, m3_valid_pred)
+```
+
+```{r Model4, eval=FALSE, include=TRUE}
+# M3 - linear discriminant
+
+m4 <- train(classe ~ ., method = "lda", data = training)
+m4_valid_pred <- predict(m4, newdata = validation)
+m4_acc <- sum(m4_valid_pred == validation$classe)/length(validation$classe)
+m4_conf_max <- table(validation$classe, m4_valid_pred)
+```
+
+```{r Model5, eval=FALSE, include=TRUE}
+# M4 - Combination of M2 to M4
+
+m2_train_pred <- predict(m2, newdata = training)
+m3_train_pred <- predict(m3, newdata = training)
+m4_train_pred <- predict(m4, newdata = training)
+
+m5_data <- data.frame(classe = training$classe, rf = m2_train_pred, gbm = m3_train_pred, lda = m4_train_pred)
+
+m5 <- train(classe ~ ., method ="rf", data = m5_data)
+
+m5_validation <- data.frame(rf = m2_valid_pred, gbm = m3_valid_pred, lda = m4_valid_pred)
+
+m5_valid_pred <- predict(m5, newdata = m5_validation)
+m5_acc <- sum(m5_valid_pred == validation$classe)/length(validation$classe)
+m5_conf_max <- table(validation$classe, m5_valid_pred)
+```
+
+```{r model 6, eval=FALSE, include=TRUE}
+# M5 - Centered and scaled Random forest
+
+m6 <- train(classe ~ ., method = "rf", data = train.PC2)
+m6$finalModel
+
+# Predict on validation set
+m6_valid_pred <- predict(m6, newdata = valid.PC2)
+
+# Results
+m6_acc <- sum(m6_valid_pred == validation$classe)/length(validation$classe)
+m6_conf_max <- table(validation$classe, m6_valid_pred)
+```
+
+```{r Model1, eval=FALSE, include=TRUE}
+# M6 - PCA and Random forest
+
+m1 <- train(classe ~ ., method = "rf", data = train.PC1)
+plot(m1$finalModel, uniform = TRUE)
+
+# Predict on validation set
+m1_valid_pred <- predict(m1, newdata = valid.PC1)
+
+# Results
+m1_acc <- sum(m1_valid_pred == validation$classe)/length(validation$classe)
+m1_conf_max <- table(validation$classe, m1_valid_pred)
+```
+
+```{r comparison, eval=FALSE, include = TRUE}
+model_comparison <- data.frame(model_num = c(1:6)
+                               , model_description = c("Random forest", "Boosted trees", "Linear discriminant", "Combination (M1, M2, M3)"
+                                                       , "Random forest", "Random forest")
+                               , data = c("Original", "Original", "Original", "Original", "Scaled and centered", "PCA")
+                               , validation_set_accuracy = c(m2_acc, m3_acc, m4_acc, m5_acc, m6_acc, m1_acc))
+```
+
+```{r conclusion, eval=FALSE, include = TRUE}
+# Predict on testing set
+test.PC2 <- predict(preProc2, testing.orig)
+m6_test_pred <- predict(m6, newdata = test.PC2)
+
+# Results
+m6_test_pred
+```
